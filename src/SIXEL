@@ -7,7 +7,7 @@ How to setup graphical and multiplexing terminal.
   tanasinn 0.3.2.0 or later (https://github.com/saitoha/tanasinn/)
 
 * Install GNU screen with sixel supporting patch.
-  Download http://bitbucket.org/arakiken/screen/get/sixel.tar.gz and
+  Download https://github.com/arakiken/screen/archive/sixel.zip and
  build it as follows.
  $ ./configure ... ; make ; make install
 
@@ -25,8 +25,9 @@ How to setup graphical and multiplexing terminal.
 
   o w3m-sixel
     WWW wo Miru Tool
-    - (arakiken's)
+    - (arakiken's) - merged to Debian's w3m.
       https://bitbucket.org/arakiken/w3m/get/sixel.tar.gz
+      https://github.com/tats/w3m/archive/master.zip (Debian's w3m)
       w3m using sixel to show images instead of w3mimgdisplay.
       Usage) $ w3m -sixel http://www.google.com
 
@@ -55,14 +56,6 @@ How to setup graphical and multiplexing terminal.
 
   o sayaka
     https://github.com/isaki68k/sayaka
-
-  o mikutterm
-    http://bitbucket.org/arakiken/mikutterm/get/sixel.tar.gz
-
-    Simply, powerfully, and moefully teokure twitter client.
-
-  o tw-sixel
-    http://bitbucket.org/arakiken/tw/get/sixel.tar.gz
 
 * Note
   GNU screen with sixel supporting patch doesn't recognize sixel
