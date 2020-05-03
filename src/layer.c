@@ -88,10 +88,10 @@ int off;
 #endif
 
 #define FOR_EACH_UNPAUSED_CANVAS(l, fn) for (cv = (l)->l_cvlist; cv; cv = cv->c_lnext) \
-  {	\
-    if ((l)->l_pause.d && cv->c_slorient)	\
-      continue;	\
-    fn	\
+  {      \
+    if ((l)->l_cvlist->c_lnext && (l)->l_pause.d && cv->c_slorient) \
+      continue;  \
+    fn   \
   }
 
 void
@@ -196,6 +196,8 @@ struct mline *ol;
   );
 }
 
+extern int procLongSeq;	/* XXX */
+
 void
 LScrollV(l, n, ys, ye, bce)
 struct layer *l;
@@ -206,10 +208,108 @@ int bce;
   struct canvas *cv;
   struct viewport *vp;
   int ys2, ye2, xs2, xe2;
+  int origProcLongSeq;
+  int orig_pause;
   if (n == 0)
     return;
-  if (l->l_pause.d)
+  if ((orig_pause = l->l_pause.d))
     LayPauseUpdateRegion(l, 0, l->l_width - 1, ys, ye);
+  if (procLongSeq == 0 && ((l->l_cvlist && !l->l_cvlist->c_lnext) || orig_pause == 0))
+    {
+      if (orig_pause)
+        {
+          LayPause(l, 0);
+          Flush(0);
+	}
+      FOR_EACH_UNPAUSED_CANVAS(l,
+        int ys3;
+        int ye3;
+        char seq[8+11*4+1];
+        int i;
+        if (cv->c_ys > cv->c_yoff + ys)
+          ys3 = cv->c_ys;
+        else
+          ys3 = cv->c_yoff + ys;
+        if (cv->c_ye < cv->c_yoff + ye)
+          ye3 = cv->c_ye;
+        else
+          ye3 = cv->c_yoff + ye;
+
+        LAY_DISPLAYS(l, AddRawStr("\x1b[m\x1b[?69h\x1b["));
+        sprintf(seq, "%d;%ds\x1b[%d;%dr\x1b[",
+               cv->c_xs + 1, cv->c_xe + 1, ys3 + 1, ye3 + 1);
+        LAY_DISPLAYS(l, AddRawStr(seq));
+        if (n > 0)
+          {
+            sprintf(seq, "%d;%dH", ye3 + 1, cv->c_xs + 1);
+            LAY_DISPLAYS(l, AddRawStr(seq));
+            for (i = 0; i < n; i++) LAY_DISPLAYS(l, AddRawStr("\n"));
+          }
+        else
+          {
+            if (ye3 - ys3 < -n)
+              {
+                for (i = 0; i < -n; i++)
+                  {
+                    if (i > 0) LAY_DISPLAYS(l, AddRawStr("\x1b["));
+                    sprintf(seq, "%d;%dH\x1b[%dX",
+                      ys3 + i + 1, cv->c_xs + 1, cv->c_xe - cv->c_xs + 1);
+                    LAY_DISPLAYS(l, AddRawStr(seq));
+                  }
+              }
+            else
+              {
+                sprintf(seq, "%d;%dH\x1b[%dL", ys3 + 1, cv->c_xs + 1, -n);
+                LAY_DISPLAYS(l, AddRawStr(seq));
+              }
+          }
+        LAY_DISPLAYS(l, AddRawStr("\x1b[?69l"));
+	if (orig_pause == 0)
+	  {
+	    if (!l->l_cvlist->c_lnext)
+	      {
+	        /* Corrupt screen without this in copy buffer mode. */
+	        if (n > 0 && ye3 - n + 1 >= 0)
+		  {
+		    /* RefreshArea() refreshes incorrect area without this cursor movement. */
+	            sprintf(seq, "\x1b[%d;%dH", ye3 -n + 2, cv->c_xs + 1);
+	            LAY_DISPLAYS(l, AddRawStr(seq));
+                    RefreshArea(cv->c_xs, ye3 - n + 1, cv->c_xe, ye3, 0);
+		  }
+	        else if (n < 0 && ys3 - n - 1 >= ys3)
+		  {
+		    /* RefreshArea() refreshes incorrect area without this cursor movement. */
+	            sprintf(seq, "\x1b[%d;%dH", ys3 + 1, cv->c_xs + 1);
+	            LAY_DISPLAYS(l, AddRawStr(seq));
+	            RefreshArea(cv->c_xs, ys3, cv->c_xe, ys3 - n - 1, 0);
+		  }
+	      }
+	    sprintf(seq, "\x1b[%d;%dr\x1b[%d;%dH", D_top+1, D_bot+1,
+	       ye3 + 1, cv->c_xs + 1);
+	  }
+        else if (D_top > 0 || D_bot < D_height - 1)
+          sprintf(seq, "\x1b[%d;%dr\x1b[%d;%dH", D_top+1, D_bot+1,
+               cv->c_yoff + l->l_y + 1,
+               cv->c_xoff + l->l_x + 1);
+        else
+          sprintf(seq, "\x1b[r\x1b[%d;%dH",
+               cv->c_yoff + l->l_y + 1,
+               cv->c_xoff + l->l_x + 1);
+        LAY_DISPLAYS(l, AddRawStr(seq));
+      );
+      Flush(0);
+      if (orig_pause)
+        {
+	  LayPause(l, 1);
+	  l->l_pause.d = orig_pause;
+	}
+    }
+
+  origProcLongSeq = procLongSeq;
+  if ((l->l_cvlist && !l->l_cvlist->c_lnext) || orig_pause == 0)
+    /* Don't output sequence until procLongSeq = origProcLongSeq (see display.c) */
+    procLongSeq = 1;
+
   FOR_EACH_UNPAUSED_CANVAS(l,
     for (vp = cv->c_vplist; vp; vp = vp->v_next)
       {
@@ -259,6 +359,14 @@ int bce;
 	  RefreshArea(xs2, ys2, xe2, ye2, 1);
       }
   );
+  if (procLongSeq)
+    {
+      LayPause(l, 0);
+      if (l->l_cvlist) Flush(0);
+      LayPause(l, 1);
+      l->l_pause.d = orig_pause;
+      procLongSeq = origProcLongSeq;
+    }
 }
 
 void
@@ -440,6 +548,7 @@ int x, y;
   struct viewport *vp;
   int xs2, xe2, y2, len, len2;
   struct mchar or;
+  int i;
 
   if (x + n > l->l_width)
     n = l->l_width - x;
@@ -474,18 +583,15 @@ int x, y;
 	  continue;
 	GotoPos(xs2, y2);
 	SetRendition(r);
+	for (i = xs2; i <= xe2; ++i)
+	  PUTCHARLP(' ');
+
+	GotoPos(xs2, y2);
+	SetRendition(r);
 	len2 = xe2 - (x + vp->v_xoff) + 1;
 	if (len2 > len)
 	  len2 = len;
 	PutWinMsg(s, xs2 - x - vp->v_xoff, len2);
-	xs2 = x + vp->v_xoff + len2;
-	if (xs2 < vp->v_xs)
-	  xs2 = vp->v_xs;
-	or = D_rend;
-	GotoPos(xs2, y2);
-	SetRendition(&or);
-	while (xs2++ <= xe2)
-	  PUTCHARLP(' ');
       }
   );
 }
@@ -814,13 +920,13 @@ int ins;
 	    }
 	  if (vp)
 	    {
+	      LScrollV(l, 1, top, bot, bce);
 	      /* add vp back to cvlist */
 	      *vpp = vp;
-	      top2 = top + vp->v_yoff;
-	      bot2 = bot + vp->v_yoff;
-	      if (top2 < vp->v_ys)
-		top2 = vp->v_ys;
-	      WrapChar(RECODE_MCHAR(c), vp->v_xoff + l->l_width, bot2, vp->v_xoff, top2, vp->v_xoff + l->l_width - 1, bot2, ins);
+	      if (ins)
+	        LInsChar(l, RECODE_MCHAR(c), 0, bot, 0);
+	      else
+	        LPutChar(l, RECODE_MCHAR(c), 0, bot);
 	    }
 	}
       );
@@ -1242,8 +1348,8 @@ int pause;
     {
       struct viewport *vp;
 
-      if (!cv->c_slorient)
-	continue;		/* Wasn't split, so already updated. */
+      if (!layer->l_cvlist->c_lnext || !cv->c_slorient)
+	continue;
 
       display = cv->c_display;
 

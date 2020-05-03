@@ -5172,7 +5172,8 @@ int n;
     }
 #endif
   SetForeWindow(p);
-  Activate(fore->w_norefresh);  
+  Activate(1);	/* No refresh */
+  LRefreshAll(&p->w_layer,0);
 }
 
 /*
@@ -5341,6 +5342,14 @@ struct win *wi;
 	    continue;
 	  /* switch to other window */
 	  SetCanvasWindow(cv, FindNiceWindow(D_other, 0));
+#if 0
+	  LRefreshAll(cv->c_layer, 0);
+#else
+	  RefreshArea(cv->c_xoff, cv->c_yoff,
+		cv->c_xoff + cv->c_layer->l_width - 1,
+		/* -1 is removed to redraw status line. */
+		cv->c_yoff + cv->c_layer->l_height, 0);
+#endif
 	  gotone = 1;
 	}
       if (gotone)
@@ -5352,7 +5361,6 @@ struct win *wi;
 	      D_readev.condpos = D_readev.condneg = 0;
 	    }
 #endif
-	  Activate(-1);
 	}
     }
 
@@ -6074,7 +6082,14 @@ char *fn, **av;
       if (!nwin.aka)
         nwin.aka = Filename(*av);
     }
-  MakeWindow(&nwin);
+  {
+    int orig;
+    orig = all_norefresh;
+    all_norefresh = 1;	/* Not refresh in Activate in MakeWindow */
+    MakeWindow(&nwin);
+    all_norefresh = orig;
+    LRefreshAll(&D_fore->w_layer,0);
+  }
 }
 
 #ifdef COPY_PASTE
@@ -7021,6 +7036,9 @@ struct canvas *cv;
   if (d->d_forecv == cv)
     return;
 
+  if (fore && fore->want_focus_event)
+    write(fore->w_ptyfd, "\x1b[O", 3);
+
   display = d;
   D_forecv = cv;
   if ((focusminwidth && (focusminwidth < 0 || D_forecv->c_xe - D_forecv->c_xs + 1 < focusminwidth)) ||
@@ -7050,6 +7068,24 @@ struct canvas *cv;
       flayer = D_forecv->c_layer;
       CV_CALL(D_forecv, LayRestore();LaySetCursor());
       WindowChanged(0, 'F');
+    }
+
+  if (fore)
+    {
+      LAY_DISPLAYS(&fore->w_layer,
+        AddRawStr((fore->hidepointer && !fore->w_layer.l_cvlist->c_lnext) ?
+	  "\x1b[>2p" : "\x1b[>p"));
+      LAY_DISPLAYS(&fore->w_layer,
+        AddRawStr((*fore->decelr && !fore->w_layer.l_cvlist->c_lnext) ?
+	  fore->decelr : "\x1b[0\'z"));
+      if (strncmp(fore->decelr, "\x1b[1", 3) == 0 && !fore->w_layer.l_cvlist->c_lnext)
+        LAY_DISPLAYS(&fore->w_layer, AddRawStr("\x1b[\'w"));	/* XXX */
+      LAY_DISPLAYS(&fore->w_layer, AddRawStr("\x1b[0\'{"));
+      if (*fore->decsle && !fore->w_layer.l_cvlist->c_lnext)
+        LAY_DISPLAYS(&fore->w_layer, AddRawStr(fore->decsle));
+      Flush(0);
+      if (fore->want_focus_event)
+        write(fore->w_ptyfd, "\x1b[I", 3);
     }
 
   display = odisplay;

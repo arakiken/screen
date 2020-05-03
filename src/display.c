@@ -65,6 +65,7 @@ static void RAW_PUTCHAR __P((int));
 static void SetBackColor __P((int));
 #endif
 static void RemoveStatusMinWait __P((void));
+static void GetCellSize(void);
 
 
 extern struct layer *flayer;
@@ -246,6 +247,7 @@ struct mode *Mode;
   D_flow = 1;
   D_nonblock = defnonblock;
   D_userfd = fd;
+  GetCellSize();
   D_readev.fd = D_writeev.fd = fd;
   D_readev.type  = EV_READ;
   D_writeev.type = EV_WRITE;
@@ -478,6 +480,7 @@ FinitTerm()
 #endif
   if (D_tcinited)
     {
+      AddRawStr("\x1b[0\'z");
       ResizeDisplay(D_defwidth, D_defheight);
       InsertMode(0);
       ChangeScrollRegion(0, D_height - 1);
@@ -958,9 +961,11 @@ int x2, y2;
   debug2(" -> (%d,%d)\n", x2, y2);
   if (!D_MS)		/* Safe to move ? */
     SetRendition(&mchar_null);
+#if 0
   if (y1 < 0			/* don't know the y position */
       || (y2 > D_bot && y1 <= D_bot)	/* have to cross border */
       || (y2 < D_top && y1 >= D_top))	/* of scrollregion ?    */
+#endif
     {
     DoCM:
       if (D_HO && !x2 && !y2)
@@ -972,6 +977,7 @@ int x2, y2;
       return;
     }
 
+#if 0
   /* some scrollregion implementations don't allow movements
    * away from the region. sigh.
    */
@@ -1121,6 +1127,7 @@ int x2, y2;
     }
   D_x = x2;
   D_y = y2;
+#endif
 }
 
 void
@@ -1264,14 +1271,16 @@ int cur_only;
   SetRendition(&mchar_null);
   SetFlow(FLOW_NOW);
 
-  ClearAll();
 #ifdef RXVT_OSC
   RefreshXtermOSC();
 #endif
   if (cur_only > 0 && D_fore)
     RefreshArea(0, D_fore->w_y, D_width - 1, D_fore->w_y, 1);
   else
-    RefreshAll(1);
+    {
+      ClearAll();
+      RefreshAll(1);
+    }
   RefreshHStatus();
   CV_CALL(D_forecv, LayRestore();LaySetCursor());
 }
@@ -1403,11 +1412,13 @@ int xs, ys, xe, ye, n, bce;
       ClearArea(xs, ys, xs, xe, xe, ye, bce, 0);
       return;
     }
+#if 0
   if (xs > D_vpxmin || xe < D_vpxmax)
     {
       RefreshArea(xs, ys, xe, ye, 0);
       return;
     }
+#endif
 
   if (D_lp_missing)
     {
@@ -2902,7 +2913,7 @@ char *s;
   D_xtermosc[i] = 1;
   AddStr("\033]");
   AddStr(oscs[i][0]);
-  AddStr(s);
+  AddRawStr(s);
   AddChar(7);
 }
 
@@ -2943,6 +2954,18 @@ char *str;
 }
 
 void
+AddRawStr(str)
+char *str;
+{
+  register char c;
+
+  ASSERT(display);
+
+  while ((c = *str++))
+    AddChar(c);
+}
+
+void
 AddStrn(str, n)
 char *str;
 int n;
@@ -2964,6 +2987,8 @@ int n;
     AddChar(' ');
 }
 
+extern int procLongSeq ;
+
 void
 Flush(progress)
 int progress;
@@ -2978,7 +3003,7 @@ int progress;
   if (l == 0)
     return;
   ASSERT(l + D_obuffree == D_obuflen);
-  if (D_userfd < 0)
+  if (D_userfd < 0 || procLongSeq)
     {
       D_obuffree += l;
       D_obufp = D_obuf;
@@ -3244,7 +3269,7 @@ char *data;
   if (D_status_obufpos && size > D_status_obufpos)
     size = D_status_obufpos;
   ASSERT(len >= 0);
-  size = write(D_userfd, D_obuf, size);
+  if (!procLongSeq) size = write(D_userfd, D_obuf, size);
   if (size >= 0) 
     {
       len -= size;
@@ -3792,6 +3817,67 @@ char **cmdv;
   D_blocked = 4;
   ClearAll();
   close(slave);
+}
+
+int line_height = 0;
+int col_width = 0;
+
+static void
+GetCellSize(void)
+{
+  fd_set  rfd;
+  struct timeval tval;
+  char buf[100];
+  char *p;
+  ssize_t len;
+  ssize_t left;
+  int wp,hp,wc,hc;
+  int i;
+
+  if (D_userfd < 0) return;
+
+#ifdef  TIOCGWINSZ
+  {
+    struct winsize ws;
+    if (ioctl(D_userfd, TIOCGWINSZ, &ws) == 0 && ws.ws_xpixel > 0 &&
+        ws.ws_col > 0 && ws.ws_ypixel > 0 && ws.ws_row > 0)
+      {
+        col_width = ws.ws_xpixel / ws.ws_col;
+        line_height = ws.ws_ypixel / ws.ws_row;
+        return;
+      }
+  }
+#endif
+
+  write(D_userfd, "\x1b[14t\x1b[18t", 10);
+
+  p = buf;
+  left = sizeof(buf) - 1;
+  for (i = 0; i < 10; i++)
+    {
+      tval.tv_usec = 200000;      /* 0.2 sec * 10 */
+      tval.tv_sec = 0;
+      FD_ZERO(&rfd);
+      FD_SET(D_userfd,&rfd);
+      if (select(D_userfd+1,&rfd,NULL,NULL,&tval) <= 0 || ! FD_ISSET(D_userfd,&rfd))
+        continue;
+      if ((len = read(D_userfd,p,left)) <= 0)
+        continue;
+      p[len] = '\0';
+
+      if (sscanf(buf,"\x1b[4;%d;%dt\x1b[8;%d;%dt",&hp,&wp,&hc,&wc) == 4)
+        {
+          if (hp > 0 && wp > 0 && hc > 0 && wc > 0)
+            {
+              col_width = wp / wc;
+              line_height = hp / hc;
+            }
+          return;
+        }
+
+      p += len;
+      left -= len;
+    }
 }
 
 #endif /* BLANKER_PRG */

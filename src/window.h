@@ -219,7 +219,7 @@ struct win
 #ifdef DW_CHARS
   int    w_mbcs;		/* saved char for multibytes charset */
 #endif
-  char	 w_string[MAXSTR];
+  char	*w_string;
   char	*w_stringp;
   char	*w_tabs;		/* line with tabs */
   int	 w_bell;		/* bell status of this window */
@@ -299,6 +299,11 @@ struct win
 #else
   int w_exitstatus;
 #endif
+
+  int hidepointer;
+  char decelr[2+1*2+1*1+2+1];
+  char decsle[2+1*3+1*2+2+1];
+  int want_focus_event;
 };
 
 
